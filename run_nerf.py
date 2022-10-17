@@ -20,7 +20,7 @@ from load_LINEMOD import load_LINEMOD_data
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
+np.random.seed(0) # 随机选择光线
 DEBUG = False
 
 
@@ -422,67 +422,92 @@ def config_parser():
 
     import configargparse
     parser = configargparse.ArgumentParser()
+    # 生成config.txt文件
     parser.add_argument('--config', is_config_file=True, 
                         help='config file path')
+    # 指定实验名称
     parser.add_argument("--expname", type=str, 
                         help='experiment name')
+    # 指定输出目录，存储log和训练参数
     parser.add_argument("--basedir", type=str, default='./logs/', 
                         help='where to store ckpts and logs')
+    # 指定数据目录
     parser.add_argument("--datadir", type=str, default='./data/llff/fern', 
                         help='input data directory')
 
     # training options
+    # coarse网络的深度和宽度
     parser.add_argument("--netdepth", type=int, default=8, 
                         help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256, 
+    parser.add_argument("--netwidth", type=int, default=256,
                         help='channels per layer')
+    # fine网络的深度和宽度
     parser.add_argument("--netdepth_fine", type=int, default=8, 
                         help='layers in fine network')
     parser.add_argument("--netwidth_fine", type=int, default=256, 
                         help='channels per layer in fine network')
+    # batch size，光束的数量
     parser.add_argument("--N_rand", type=int, default=32*32*4, 
                         help='batch size (number of random rays per gradient step)')
+    # 学习率
     parser.add_argument("--lrate", type=float, default=5e-4, 
                         help='learning rate')
+    # 指数学习率衰减
     parser.add_argument("--lrate_decay", type=int, default=250, 
                         help='exponential learning rate decay (in 1000 steps)')
+    # 并行处理的光线和点的数量，如果溢出则减少（降4的倍数即可）
     parser.add_argument("--chunk", type=int, default=1024*32, 
                         help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--netchunk", type=int, default=1024*64, 
+    parser.add_argument("--netchunk", type=int, default=1024*64,
                         help='number of pts sent through network in parallel, decrease if running out of memory')
+    # 一次只能从【一张】图片中获取一个batch的光线
     parser.add_argument("--no_batching", action='store_true', 
                         help='only take random rays from 1 image at a time')
+    # 不从保存的ckpt加载权重
     parser.add_argument("--no_reload", action='store_true', 
                         help='do not reload weights from saved ckpt')
+    # 为coarse网络重新加载特定权重
     parser.add_argument("--ft_path", type=str, default=None, 
                         help='specific weights npy file to reload for coarse network')
 
     # rendering options
+    # 每条射线在粗糙采样时的点数量
     parser.add_argument("--N_samples", type=int, default=64, 
                         help='number of coarse samples per ray')
+    # 每条射线附加的细样本数
     parser.add_argument("--N_importance", type=int, default=0,
                         help='number of additional fine samples per ray')
+    # 抖动
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')
+    # 去控制输入是5D（包含方向）信息还是3D（不包含方向）信息，默认都是true，只有在实验对比的时候不加对比一下效果
     parser.add_argument("--use_viewdirs", action='store_true', 
                         help='use full 5D input instead of 3D')
+    # 默认位置编码
     parser.add_argument("--i_embed", type=int, default=0, 
                         help='set 0 for default positional encoding, -1 for none')
+    # positional encoding：多分辨率
     parser.add_argument("--multires", type=int, default=10, 
                         help='log2 of max freq for positional encoding (3D location)')
+    # positional encoding：2D方向的多分辨率
     parser.add_argument("--multires_views", type=int, default=4, 
                         help='log2 of max freq for positional encoding (2D direction)')
+    # 噪音方差
     parser.add_argument("--raw_noise_std", type=float, default=0., 
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
 
+    # 不训练只跑前向（渲染），加载已经训练好的权重和渲染render_poses路径
     parser.add_argument("--render_only", action='store_true', 
                         help='do not optimize, reload weights and render out render_poses path')
+    # 渲染测试集（也是前向，测试集有GT），而不是render_poses路径
     parser.add_argument("--render_test", action='store_true', 
                         help='render the test set instead of render_poses path')
+    # 下采样因子以加快渲染速度，设置为 4 或 8 用于快速预览
     parser.add_argument("--render_factor", type=int, default=0, 
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
     # training options
+    # 中心crop，不会用
     parser.add_argument("--precrop_iters", type=int, default=0,
                         help='number of steps to train on central crops')
     parser.add_argument("--precrop_frac", type=float,
@@ -491,6 +516,7 @@ def config_parser():
     # dataset options
     parser.add_argument("--dataset_type", type=str, default='llff', 
                         help='options: llff / blender / deepvoxels')
+    # 将从测试/验证集中加载 1/N 图像，这对于像 deepvoxels 这样的大型数据集很有用
     parser.add_argument("--testskip", type=int, default=8, 
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
 
@@ -505,10 +531,12 @@ def config_parser():
                         help='load blender synthetic data at 400x400 instead of 800x800')
 
     ## llff flags
+    # LLFF下采样因子
     parser.add_argument("--factor", type=int, default=8, 
                         help='downsample factor for LLFF images')
     parser.add_argument("--no_ndc", action='store_true', 
                         help='do not use normalized device coordinates (set for non-forward facing scenes)')
+    # 视差和深度转换
     parser.add_argument("--lindisp", action='store_true', 
                         help='sampling linearly in disparity rather than depth')
     parser.add_argument("--spherify", action='store_true', 
@@ -532,6 +560,13 @@ def config_parser():
 
 
 def train():
+    """
+    开始训练，先把5D输入进行编码，然后交给MLP得到4D的数据（颜色和体素的密度）
+    然后进行体渲染得到图片，再和真值计算L2 loss。
+
+    python run_nerf.py --config configs/lego.txt
+
+    """
 
     parser = config_parser()
     args = parser.parse_args()

@@ -60,17 +60,19 @@ def _minify(basedir, factors=[], resolutions=[]):
         
         
 def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
-    
+
     poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
     poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1,2,0])
     bds = poses_arr[:, -2:].transpose([1,0])
-    
+
+    # 读取第一张图，算一下高度和宽度
     img0 = [os.path.join(basedir, 'images', f) for f in sorted(os.listdir(os.path.join(basedir, 'images'))) \
             if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]
     sh = imageio.imread(img0).shape
     
     sfx = ''
-    
+
+    # _minify是一个下采样函数，可缩小原图分辨率
     if factor is not None:
         sfx = '_{}'.format(factor)
         _minify(basedir, factors=[factor])
@@ -97,7 +99,8 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     if poses.shape[-1] != len(imgfiles):
         print( 'Mismatch between imgs {} and poses {} !!!!'.format(len(imgfiles), poses.shape[-1]) )
         return
-    
+
+    # 获取图像的shape，并用下采样后的shape将原pose第5列的hw换掉（下标4代表第五列）
     sh = imageio.imread(imgfiles[0]).shape
     poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1])
     poses[2, 4, :] = poses[2, 4, :] * 1./factor
@@ -110,17 +113,13 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
             return imageio.imread(f, ignoregamma=True)
         else:
             return imageio.imread(f)
-        
+
+    # 归一化
     imgs = imgs = [imread(f)[...,:3]/255. for f in imgfiles]
     imgs = np.stack(imgs, -1)  
     
     print('Loaded image data', imgs.shape, poses[:,-1,0])
     return poses, bds, imgs
-
-    
-            
-            
-    
 
 def normalize(x):
     return x / np.linalg.norm(x)
@@ -167,7 +166,7 @@ def recenter_poses(poses):
 
     poses_ = poses+0
     bottom = np.reshape([0,0,0,1.], [1,4])
-    c2w = poses_avg(poses)
+    c2w = poses_avg(poses) # pose取平均
     c2w = np.concatenate([c2w[:3,:4], bottom], -2)
     bottom = np.tile(np.reshape(bottom, [1,1,4]), [poses.shape[0],1,1])
     poses = np.concatenate([poses[:,:3,:4], bottom], -2)
@@ -241,11 +240,15 @@ def spherify_poses(poses, bds):
     
 
 def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False):
-    
 
+    # 读取原始数据 20张图
+    # images [20,378,504,3] poses[20,3,5] render_poses[120,3,5]
+    # bds 深度范围 [20,2]（是LLFF数据集设定规则得到的，直接读取就行了）
+
+    # pose 位姿：前面的3x3是R，第4列是T，第5列是hwf
     poses, bds, imgs = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     print('Loaded', basedir, bds.min(), bds.max())
-    
+
     # Correct rotation matrix ordering and move variable dim to axis 0
     poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
@@ -259,6 +262,11 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     bds *= sc
     
     if recenter:
+        # 世界坐标系中心重定义
+        # 计算所有pose的均值，将所有pose做个该均值逆转换
+        # 即重新定义了世界坐标系，原点大致在被测物体中心
+
+        # 比如SLAM，世界坐标系一般以第一帧为主，而这里就做了个中心重新定义
         poses = recenter_poses(poses)
         
     if spherify:
@@ -275,6 +283,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         up = normalize(poses[:, :3, 1].sum(0))
 
         # Find a reasonable "focus depth" for this dataset
+        # 最近最远深度值
         close_depth, inf_depth = bds.min()*.9, bds.max()*5.
         dt = .75
         mean_dz = 1./(((1.-dt)/close_depth + dt/inf_depth))
@@ -296,7 +305,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
             N_rots = 1
             N_views/=2
 
-        # Generate poses for spiral path
+        # Generate poses for spiral path 新渲染的pose计算
         render_poses = render_path_spiral(c2w_path, up, rads, focal, zdelta, zrate=.5, rots=N_rots, N=N_views)
         
         
@@ -316,4 +325,11 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     return images, poses, bds, render_poses, i_test
 
 
+if __name__ == "__main__":
+    basedir = "/home/dingchaofan/nerf_pytorch/data/nerf_llff_data/fern/"
+    poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
+    poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1, 2, 0])
+    bds = poses_arr[:, -2:].transpose([1, 0])
 
+    print(bds)
+    print(bds.shape)
