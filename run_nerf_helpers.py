@@ -34,7 +34,7 @@ class Embedder:
             freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
             
         for freq in freq_bands:
-            for p_fn in self.kwargs['periodic_fns']:
+            for p_fn in self.kwargs['periodic_fns']: # 论文中的公式（4）
                 embed_fns.append(lambda x, p_fn=p_fn, freq=freq : p_fn(x * freq))
                 out_dim += d
                     
@@ -162,9 +162,14 @@ def get_rays(H, W, K, c2w):
     return rays_o, rays_d
 
 
+# 其实就是把像素点转为世界坐标系的3D点
 def get_rays_np(H, W, K, c2w):
+    # 像素坐标i, j
     i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
+    # 将内参K取逆，把像素坐标i,j（2D）转相机坐标（3D）
     dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
+    # 然后再把pose取逆（即R T外参），将相机坐标转为世界坐标。c2w传进来的是pose
+    # c2w:Camera-to-world ransformation matrix。传进来的就是pose
     # Rotate ray directions from camera frame to the world frame
     rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.

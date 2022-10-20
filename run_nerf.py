@@ -37,6 +37,7 @@ def batchify(fn, chunk):
 def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
     """Prepares inputs and applies network 'fn'.
     """
+    # 批量处理数据函数 run_network
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
     embedded = embed_fn(inputs_flat)
 
@@ -46,7 +47,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
-    outputs_flat = batchify(fn, netchunk)(embedded)
+    outputs_flat = batchify(fn, netchunk)(embedded) # 批量处理
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
 
@@ -77,6 +78,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
       focal: float. Focal length of pinhole camera.
       chunk: int. Maximum number of rays to process simultaneously. Used to
         control maximum memory usage. Does not affect final results.
+        并行处理的最大光线数量
       rays: array of shape [2, batch_size, 3]. Ray origin and direction for
         each example in batch.
       c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
@@ -101,7 +103,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
 
     if use_viewdirs:
         # provide ray directions as input
-        viewdirs = rays_d
+        viewdirs = rays_d # 就是view direction
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
             rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
@@ -178,6 +180,9 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
+
+    # 先对xyz和方向做位置编码
+    # 位置xyz（三维）升为63维向量，方向d（三维）升到27维向量
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
     input_ch_views = 0
@@ -186,6 +191,7 @@ def create_nerf(args):
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
+
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
                  input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
@@ -193,11 +199,13 @@ def create_nerf(args):
 
     model_fine = None
     if args.N_importance > 0:
+        # 初始化NERF
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
                           input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
         grad_vars += list(model_fine.parameters())
 
+    # 批量处理数据函数 run_network
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
                                                                 embed_fn=embed_fn,
                                                                 embeddirs_fn=embeddirs_fn,
@@ -212,7 +220,7 @@ def create_nerf(args):
 
     ##########################
 
-    # Load checkpoints
+    # Load checkpoints 中断训练加载
     if args.ft_path is not None and args.ft_path!='None':
         ckpts = [args.ft_path]
     else:
@@ -272,6 +280,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         weights: [num_rays, num_samples]. Weights assigned to each sampled color.
         depth_map: [num_rays]. Estimated distance to object.
     """
+    # 体积渲染公式 dists两个点之间的距离
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
     dists = z_vals[...,1:] - z_vals[...,:-1]
@@ -305,6 +314,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     return rgb_map, disp_map, acc_map, weights, depth_map
 
 
+# 体积渲染 Volumetric rendering
 def render_rays(ray_batch,
                 network_fn,
                 network_query_fn,
@@ -320,27 +330,31 @@ def render_rays(ray_batch,
                 pytest=False):
     """Volumetric rendering.
     Args:
-      ray_batch: array of shape [batch_size, ...]. All information necessary
+      【ray_batch】: 采样所需的所有数据，ray原点、方向、最大最小距离
+        array of shape [batch_size, ...]. All information necessary
         for sampling along a ray, including: ray origin, ray direction, min
         dist, max dist, and unit-magnitude viewing direction.
-      network_fn: function. Model for predicting RGB and density at each point
+      【network_fn】: NeRF MLP网络，预测空间中每个点的RGB和不透明度
+        function. Model for predicting RGB and density at each point
         in space.
       network_query_fn: function used for passing queries to network_fn.
-      N_samples: int. Number of different times to sample along each ray.
+      【N_samples】: coarse网络的粗采样点数
+        int. Number of different times to sample along each ray.
       retraw: bool. If True, include model's raw, unprocessed predictions.
       lindisp: bool. If True, sample linearly in inverse depth rather than in depth.
       perturb: float, 0 or 1. If non-zero, each ray is sampled at stratified
         random points in time.
-      N_importance: int. Number of additional times to sample along each ray.
+      【N_importance】: fine网络精细采样的点数
+        int. Number of additional times to sample along each ray.
         These samples are only passed to network_fine.
       network_fine: "fine" network with same spec as network_fn.
       white_bkgd: bool. If True, assume a white background.
       raw_noise_std: ...
       verbose: bool. If True, print more debugging info.
     Returns:
-      rgb_map: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
+      【rgb_map】: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
       disp_map: [num_rays]. Disparity map. 1 / depth.
-      acc_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
+      【acc_map】: 不透明度 [num_rays]. Accumulated opacity along each ray. Comes from fine model.
       raw: [num_rays, num_samples, 4]. Raw predictions from model.
       rgb0: See rgb_map. Output for coarse model.
       disp0: See disp_map. Output for coarse model.
@@ -354,7 +368,9 @@ def render_rays(ray_batch,
     bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2])
     near, far = bounds[...,0], bounds[...,1] # [-1,1]
 
+    # 0-1均匀采样N_samples个点
     t_vals = torch.linspace(0., 1., steps=N_samples)
+
     if not lindisp:
         z_vals = near * (1.-t_vals) + far * (t_vals)
     else:
@@ -378,18 +394,22 @@ def render_rays(ray_batch,
 
         z_vals = lower + (upper - lower) * t_rand
 
+    # 每个采样点的3D坐标，o+td
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
-
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
+    # raw2outputs() 体积渲染公式
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
+    # 上面都是coarse网络生成
+    # 如果设置的fine网络精细采样的点数大于0个，则进入fine网络进一步采样出一些点，并进行渲染
     if N_importance > 0:
 
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
+        # 根据weights去采样：Hierarchical sampling核心 sample_pdf()
         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
         z_samples = z_samples.detach()
 
@@ -648,6 +668,8 @@ def train():
     hwf = [H, W, focal]
 
     if K is None:
+        # 生成内参矩阵K：
+        # cx,cy : 0.5*W 0.5*H   即主点坐标默认图像原点（中心点）
         K = np.array([
             [focal, 0, 0.5*W],
             [0, focal, 0.5*H],
@@ -657,7 +679,7 @@ def train():
     if args.render_test:
         render_poses = np.array(poses[i_test])
 
-    # Create log dir and copy the config file
+    # Create log dir and copy the config file 创建log
     basedir = args.basedir
     expname = args.expname
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -672,6 +694,7 @@ def train():
             file.write(open(args.config, 'r').read())
 
     # Create nerf model
+    # 核心！！！创建nerf
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
     global_step = start
 
@@ -686,6 +709,7 @@ def train():
     render_poses = torch.Tensor(render_poses).to(device)
 
     # Short circuit if only rendering out from trained model
+    # 如果只渲染（也就是前向推理），那么推理后就直接return了，不继续后面的
     if args.render_only:
         print('RENDER ONLY')
         with torch.no_grad():
@@ -706,6 +730,8 @@ def train():
 
             return
 
+    # 得到光线rays（这里还没有经过渲染得到光线的RGB，仅仅是像素点转为世界坐标点）
+    # 【get_rays_np】（其他get_rays都差不多）
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     use_batching = not args.no_batching
@@ -791,7 +817,10 @@ def train():
                 batch_rays = torch.stack([rays_o, rays_d], 0)
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
+        # 核心！！！渲染 rendering
         #####  Core optimization loop  #####
+        # 返回RGB map，深度图
+        # rander()总入口 -> batchify_rays()批处理 -> render_rays()体积渲染
         rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                                 verbose=i < 10, retraw=True,
                                                 **render_kwargs_train)

@@ -305,7 +305,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
             N_rots = 1
             N_views/=2
 
-        # Generate poses for spiral path 新渲染的pose计算
+        # Generate poses for spiral path 新渲染的位姿pose计算，就是跑前向生成新视角的位姿
         render_poses = render_path_spiral(c2w_path, up, rads, focal, zdelta, zrate=.5, rots=N_rots, N=N_views)
         
         
